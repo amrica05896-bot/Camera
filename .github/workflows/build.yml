@@ -37,7 +37,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -262,8 +261,6 @@ jobs:
           import androidx.compose.foundation.layout.Row
           import androidx.compose.foundation.layout.Spacer
           import androidx.compose.foundation.layout.WindowInsets
-          import androidx.compose.foundation.layout.WindowInsetsSides
-          import androidx.compose.foundation.layout.asPaddingValues
           import androidx.compose.foundation.layout.fillMaxSize
           import androidx.compose.foundation.layout.fillMaxWidth
           import androidx.compose.foundation.layout.height
@@ -298,8 +295,7 @@ jobs:
           import androidx.compose.runtime.mutableIntStateOf
           import androidx.compose.runtime.mutableStateOf
           import androidx.compose.runtime.remember
-          import androidx.compose.runtime.rememberCoroutineScope
-          import androidx.compose.runtime.saveable.rememberSaveable
+          import androidx.compose.runtime.rememberSaveable
           import androidx.compose.runtime.setValue
           import androidx.compose.ui.Alignment
           import androidx.compose.ui.Modifier
@@ -483,9 +479,7 @@ jobs:
 
                       val recorder = Recorder.Builder()
                           .setQualitySelector(
-                              QualitySelector.from(
-                                  Quality.FHD
-                              )
+                              QualitySelector.from(Quality.FHD)
                           )
                           .build()
 
@@ -900,7 +894,6 @@ jobs:
                           .fillMaxWidth()
                           .height(1.dp)
                           .align(Alignment.TopCenter)
-                          .padding(top = 0.dp)
                           .background(Color.White.copy(alpha = 0.12f))
                   )
                   Box(
@@ -917,7 +910,6 @@ jobs:
                           .align(Alignment.BottomCenter)
                           .background(Color.White.copy(alpha = 0.12f))
                   )
-
                   Box(
                       modifier = Modifier
                           .width(1.dp)
