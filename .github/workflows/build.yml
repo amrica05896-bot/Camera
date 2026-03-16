@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: build-live-glass-camera-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -16,12 +20,11 @@ jobs:
     env:
       APP_ID: com.amrica.camera
       APP_NAME: LiveGlassCamera
-      JAVA_VERSION: "17"
-      GRADLE_VERSION: "9.3.1"
       ANDROID_API: "35"
       BUILD_TOOLS: "35.0.0"
+      AGP_VERSION: "8.13.0"
       KOTLIN_VERSION: "2.3.10"
-      AGP_VERSION: "9.1.0"
+      GRADLE_VERSION: "8.13"
       CAMERAX_VERSION: "1.5.3"
       COMPOSE_BOM: "2026.02.01"
 
@@ -33,7 +36,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: "17"
           cache: gradle
 
       - name: Set up Android SDK
@@ -44,14 +47,20 @@ jobs:
             platforms;android-${{ env.ANDROID_API }}
             build-tools;${{ env.BUILD_TOOLS }}
 
-      - name: Prepare project structure
+      - name: Install Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gradle
+
+      - name: Generate project files
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p app/src/main/java/com/amrica/camera
           mkdir -p app/src/main/res/values
-          mkdir -p app/src/main/res/xml
           mkdir -p gradle/wrapper
 
           cat > gradle.properties <<'EOF'
@@ -59,8 +68,8 @@ jobs:
           android.enableJetifier=true
           android.nonTransitiveRClass=true
           org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
-          org.gradle.configuration-cache=true
           org.gradle.caching=true
+          org.gradle.configuration-cache=true
           kotlin.code.style=official
           EOF
 
@@ -133,14 +142,14 @@ jobs:
           }
 
           dependencies {
-              val composeBom = platform("androidx.compose:compose-bom:${COMPOSE_BOM}")
-              implementation(composeBom)
+              implementation(platform("androidx.compose:compose-bom:${COMPOSE_BOM}"))
 
               implementation("androidx.activity:activity-compose:1.10.1")
-              implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.0")
+              implementation("androidx.core:core-ktx:1.16.0")
               implementation("androidx.compose.ui:ui")
               implementation("androidx.compose.ui:ui-tooling-preview")
               implementation("androidx.compose.foundation:foundation")
+              implementation("androidx.compose.animation:animation")
               implementation("androidx.compose.material3:material3")
               implementation("androidx.compose.material:material-icons-extended")
 
@@ -167,7 +176,6 @@ jobs:
 
               <application
                   android:allowBackup="true"
-                  android:icon="@android:drawable/ic_menu_camera"
                   android:label="@string/app_name"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.LiveGlassCamera">
@@ -194,9 +202,9 @@ jobs:
 
           cat > app/src/main/res/values/colors.xml <<'EOF'
           <resources>
-              <color name="glass_black">#0A0A0A</color>
-              <color name="glass_surface">#22FFFFFF</color>
-              <color name="glass_surface_strong">#44FFFFFF</color>
+              <color name="glass_black">#000000</color>
+              <color name="glass_surface">#1FFFFFFF</color>
+              <color name="glass_surface_strong">#33FFFFFF</color>
               <color name="glass_accent">#FFD60A</color>
               <color name="glass_red">#FF3B30</color>
           </resources>
@@ -236,8 +244,7 @@ jobs:
           import androidx.camera.core.Preview
           import androidx.camera.lifecycle.ProcessCameraProvider
           import androidx.camera.view.PreviewView
-          import androidx.camera.video.FallbackStrategy
-          import androidx.camera.video.MediaStoreOutputOptions
+          import androidx.camera.video.FileOutputOptions
           import androidx.camera.video.Quality
           import androidx.camera.video.QualitySelector
           import androidx.camera.video.Recorder
@@ -245,7 +252,6 @@ jobs:
           import androidx.camera.video.VideoCapture
           import androidx.camera.video.VideoRecordEvent
           import androidx.compose.animation.core.animateFloatAsState
-          import androidx.compose.foundation.Canvas
           import androidx.compose.foundation.background
           import androidx.compose.foundation.border
           import androidx.compose.foundation.clickable
@@ -257,11 +263,11 @@ jobs:
           import androidx.compose.foundation.layout.Spacer
           import androidx.compose.foundation.layout.WindowInsets
           import androidx.compose.foundation.layout.WindowInsetsSides
-          import androidx.compose.foundation.layout.WindowInsetsTopHeight
           import androidx.compose.foundation.layout.asPaddingValues
           import androidx.compose.foundation.layout.fillMaxSize
           import androidx.compose.foundation.layout.fillMaxWidth
           import androidx.compose.foundation.layout.height
+          import androidx.compose.foundation.layout.navigationBarsPadding
           import androidx.compose.foundation.layout.padding
           import androidx.compose.foundation.layout.size
           import androidx.compose.foundation.layout.width
@@ -274,13 +280,9 @@ jobs:
           import androidx.compose.material.icons.filled.Cameraswitch
           import androidx.compose.material.icons.filled.FlashOn
           import androidx.compose.material.icons.filled.GridOn
-          import androidx.compose.material.icons.filled.Mic
           import androidx.compose.material.icons.filled.Videocam
-          import androidx.compose.material3.AlertDialog
           import androidx.compose.material3.Button
           import androidx.compose.material3.ButtonDefaults
-          import androidx.compose.material3.CardDefaults
-          import androidx.compose.material3.Divider
           import androidx.compose.material3.Icon
           import androidx.compose.material3.IconButton
           import androidx.compose.material3.MaterialTheme
@@ -302,7 +304,6 @@ jobs:
           import androidx.compose.ui.Alignment
           import androidx.compose.ui.Modifier
           import androidx.compose.ui.draw.clip
-          import androidx.compose.ui.geometry.Offset
           import androidx.compose.ui.graphics.Color
           import androidx.compose.ui.graphics.asComposeRenderEffect
           import androidx.compose.ui.graphics.graphicsLayer
@@ -314,9 +315,9 @@ jobs:
           import androidx.compose.ui.unit.sp
           import androidx.compose.ui.viewinterop.AndroidView
           import androidx.core.content.ContextCompat
+          import kotlinx.coroutines.launch
           import java.io.File
           import java.util.concurrent.Executors
-          import kotlinx.coroutines.launch
 
           private enum class CameraMode {
               PHOTO,
@@ -330,19 +331,19 @@ jobs:
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   setContent {
-                      val darkScheme = darkColorScheme(
-                          primary = Color(0xFFFFD60A),
-                          secondary = Color(0xFFBDBDBD),
-                          tertiary = Color(0xFF74B9FF),
-                          background = Color(0xFF000000),
-                          surface = Color(0x22000000),
-                          onPrimary = Color.Black,
-                          onSecondary = Color.White,
-                          onBackground = Color.White,
-                          onSurface = Color.White
-                      )
-
-                      MaterialTheme(colorScheme = darkScheme) {
+                      MaterialTheme(
+                          colorScheme = darkColorScheme(
+                              primary = Color(0xFFFFD60A),
+                              secondary = Color(0xFFBDBDBD),
+                              tertiary = Color(0xFF74B9FF),
+                              background = Color.Black,
+                              surface = Color(0x1FFFFFFF),
+                              onPrimary = Color.Black,
+                              onSecondary = Color.White,
+                              onBackground = Color.White,
+                              onSurface = Color.White
+                          )
+                      ) {
                           LiveGlassApp()
                       }
                   }
@@ -352,9 +353,7 @@ jobs:
           @Composable
           private fun LiveGlassApp() {
               val context = LocalContext.current
-              val cameraPermission = Manifest.permission.CAMERA
-              val audioPermission = Manifest.permission.RECORD_AUDIO
-              val permissions = arrayOf(cameraPermission, audioPermission)
+              val permissions = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
 
               var hasPermission by remember {
                   mutableStateOf(
@@ -364,7 +363,7 @@ jobs:
                   )
               }
 
-              val launcher = rememberLauncherForActivityResult(
+              val permissionLauncher = rememberLauncherForActivityResult(
                   contract = ActivityResultContracts.RequestMultiplePermissions()
               ) { result ->
                   hasPermission = permissions.all { result[it] == true }
@@ -372,14 +371,14 @@ jobs:
 
               LaunchedEffect(Unit) {
                   if (!hasPermission) {
-                      launcher.launch(permissions)
+                      permissionLauncher.launch(permissions)
                   }
               }
 
               if (hasPermission) {
                   CameraScreen()
               } else {
-                  PermissionScreen(onRequest = { launcher.launch(permissions) })
+                  PermissionScreen(onRequest = { permissionLauncher.launch(permissions) })
               }
           }
 
@@ -395,18 +394,25 @@ jobs:
                       Text(
                           text = "Live Glass Camera",
                           color = Color.White,
-                          fontSize = 26.sp,
+                          fontSize = 28.sp,
                           fontWeight = FontWeight.Bold
                       )
                       Spacer(modifier = Modifier.height(12.dp))
                       Text(
-                          text = "لازم صلاحية الكاميرا والميكروفون عشان الصورة والفيديو يشتغلوا بالكامل.",
-                          color = Color.White.copy(alpha = 0.75f),
+                          text = "تفعيل صلاحية الكاميرا والميكروفون مطلوب للصور والفيديو.",
+                          color = Color.White.copy(alpha = 0.72f),
+                          fontSize = 14.sp,
                           textAlign = TextAlign.Center,
-                          modifier = Modifier.padding(horizontal = 32.dp)
+                          modifier = Modifier.padding(horizontal = 28.dp)
                       )
-                      Spacer(modifier = Modifier.height(24.dp))
-                      Button(onClick = onRequest) {
+                      Spacer(modifier = Modifier.height(22.dp))
+                      Button(
+                          onClick = onRequest,
+                          colors = ButtonDefaults.buttonColors(
+                              containerColor = Color(0xFFFFD60A),
+                              contentColor = Color.Black
+                          )
+                      ) {
                           Text("تفعيل الصلاحيات")
                       }
                   }
@@ -417,8 +423,8 @@ jobs:
           private fun CameraScreen() {
               val context = LocalContext.current
               val lifecycleOwner = LocalLifecycleOwner.current
-              val mainExecutor = remember { Executors.newSingleThreadExecutor() }
-              val scope = rememberCoroutineScope()
+              val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
+              val backgroundExecutor = remember { Executors.newSingleThreadExecutor() }
 
               val previewView = remember {
                   PreviewView(context).apply {
@@ -428,6 +434,7 @@ jobs:
               }
 
               val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
+
               var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
               var camera by remember { mutableStateOf<Camera?>(null) }
               var imageCapture by remember {
@@ -445,11 +452,11 @@ jobs:
               var currentMode by rememberSaveable { mutableStateOf(CameraMode.PHOTO) }
               var lensFacing by rememberSaveable { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
               var zoomRatio by rememberSaveable { mutableFloatStateOf(1f) }
-              var showGrid by rememberSaveable { mutableStateOf(true) }
               var torchOn by rememberSaveable { mutableStateOf(false) }
+              var showGrid by rememberSaveable { mutableStateOf(true) }
               var isRecording by rememberSaveable { mutableStateOf(false) }
 
-              val cameraModes = remember {
+              val modes = remember {
                   listOf(
                       CameraMode.CINEMATIC,
                       CameraMode.VIDEO,
@@ -462,7 +469,7 @@ jobs:
               LaunchedEffect(cameraProviderFuture) {
                   cameraProviderFuture.addListener({
                       cameraProvider = cameraProviderFuture.get()
-                  }, ContextCompat.getMainExecutor(context))
+                  }, mainExecutor)
               }
 
               LaunchedEffect(cameraProvider, lensFacing) {
@@ -477,8 +484,7 @@ jobs:
                       val recorder = Recorder.Builder()
                           .setQualitySelector(
                               QualitySelector.from(
-                                  Quality.FHD,
-                                  FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
+                                  Quality.FHD
                               )
                           )
                           .build()
@@ -504,8 +510,8 @@ jobs:
                       camera?.cameraControl?.setZoomRatio(zoomRatio)
                       camera?.cameraControl?.enableTorch(torchOn)
                   } catch (e: Exception) {
-                      Log.e("LiveGlassCamera", "Failed to bind camera", e)
-                      Toast.makeText(context, "فشل تشغيل الكاميرا: ${e.message}", Toast.LENGTH_LONG).show()
+                      Log.e("LiveGlassCamera", "bind failed", e)
+                      Toast.makeText(context, "فشل تشغيل الكاميرا", Toast.LENGTH_SHORT).show()
                   }
               }
 
@@ -521,11 +527,15 @@ jobs:
                   onDispose {
                       activeRecording?.close()
                       cameraProvider?.unbindAll()
-                      mainExecutor.shutdown()
+                      backgroundExecutor.shutdown()
                   }
               }
 
-              Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+              Box(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .background(Color.Black)
+              ) {
                   AndroidView(
                       modifier = Modifier.fillMaxSize(),
                       factory = { previewView }
@@ -535,205 +545,117 @@ jobs:
                       GridOverlay()
                   }
 
-                  GlassTopBar(
+                  TopGlassBar(
                       mode = currentMode,
+                      torchOn = torchOn,
+                      showGrid = showGrid,
+                      onTorchToggle = { torchOn = it },
+                      onGridToggle = { showGrid = it },
                       onSwitchCamera = {
                           lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
                               CameraSelector.LENS_FACING_FRONT
                           } else {
                               CameraSelector.LENS_FACING_BACK
                           }
-                      },
-                      torchOn = torchOn,
-                      onTorchToggle = { torchOn = it },
-                      showGrid = showGrid,
-                      onGridToggle = { showGrid = it }
+                      }
                   )
 
                   Column(
                       modifier = Modifier
                           .align(Alignment.BottomCenter)
                           .fillMaxWidth()
-                          .padding(bottom = 10.dp)
+                          .navigationBarsPadding()
+                          .padding(bottom = 12.dp)
                   ) {
-                      ModernModeStrip(
-                          modes = cameraModes,
+                      ModeStrip(
+                          modes = modes,
                           current = currentMode,
                           onSelect = { currentMode = it }
                       )
 
-                      Surface(
-                          modifier = Modifier
-                              .fillMaxWidth()
-                              .padding(horizontal = 14.dp, vertical = 10.dp)
-                              .clip(RoundedCornerShape(28.dp))
-                              .graphicsLayer {
-                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                      renderEffect =
-                                          android.graphics.RenderEffect.createBlurEffect(
-                                              44f,
-                                              44f,
-                                              android.graphics.Shader.TileMode.MIRROR
-                                          ).asComposeRenderEffect()
-                                  }
-                              },
-                          color = Color(0x1AFFFFFF),
-                          tonalElevation = 0.dp,
-                          shadowElevation = 0.dp
-                      ) {
-                          Column(
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .padding(horizontal = 16.dp, vertical = 14.dp)
-                          ) {
-                              Text(
-                                  text = "Zoom",
-                                  color = Color.White.copy(alpha = 0.8f),
-                                  fontSize = 12.sp,
-                                  fontWeight = FontWeight.Medium
-                              )
-                              Slider(
-                                  value = zoomRatio,
-                                  onValueChange = {
-                                      zoomRatio = it.coerceIn(1f, 8f)
-                                  },
-                                  valueRange = 1f..8f,
-                                  steps = 0
-                              )
-
-                              Row(
-                                  modifier = Modifier.fillMaxWidth(),
-                                  horizontalArrangement = Arrangement.SpaceBetween,
-                                  verticalAlignment = Alignment.CenterVertically
-                              ) {
-                                  ZoomPill("0.5x", zoomRatio, 0.5f) { zoomRatio = it }
-                                  ZoomPill("1x", zoomRatio, 1f) { zoomRatio = it }
-                                  ZoomPill("2x", zoomRatio, 2f) { zoomRatio = it }
-                                  ZoomPill("5x", zoomRatio, 5f) { zoomRatio = it }
+                      BottomGlassPanel(
+                          zoomRatio = zoomRatio,
+                          onZoomChange = { zoomRatio = it },
+                          mode = currentMode,
+                          isRecording = isRecording,
+                          onPrimaryAction = {
+                              if (currentMode == CameraMode.VIDEO) {
+                                  toggleVideoRecording(
+                                      context = context,
+                                      videoCapture = videoCapture,
+                                      activeRecording = activeRecording,
+                                      onRecordingChanged = { activeRecording = it },
+                                      onStateChanged = { isRecording = it }
+                                  )
+                              } else {
+                                  takePhoto(context, imageCapture)
                               }
-
-                              Spacer(modifier = Modifier.height(16.dp))
-
-                              Row(
-                                  modifier = Modifier.fillMaxWidth(),
-                                  horizontalArrangement = Arrangement.SpaceBetween,
-                                  verticalAlignment = Alignment.CenterVertically
-                              ) {
-                                  GlassActionButton(
-                                      icon = Icons.Default.GridOn,
-                                      label = if (showGrid) "Grid On" else "Grid Off",
-                                      active = showGrid,
-                                      onClick = { showGrid = !showGrid }
-                                  )
-
-                                  CaptureButton(
-                                      mode = currentMode,
-                                      recording = isRecording,
-                                      onPhoto = {
-                                          if (currentMode == CameraMode.VIDEO) {
-                                              toggleVideoRecording(
-                                                  context = context,
-                                                  videoCapture = videoCapture,
-                                                  activeRecording = activeRecording,
-                                                  onRecordingChanged = { activeRecording = it },
-                                                  onStateChanged = { isRecording = it }
-                                              )
-                                          } else {
-                                              takePhoto(context, imageCapture)
-                                          }
-                                      }
-                                  )
-
-                                  GlassActionButton(
-                                      icon = Icons.Default.Cameraswitch,
-                                      label = "Flip",
-                                      active = false,
-                                      onClick = {
-                                          lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
-                                              CameraSelector.LENS_FACING_FRONT
-                                          } else {
-                                              CameraSelector.LENS_FACING_BACK
-                                          }
-                                      }
-                                  )
+                          },
+                          onSwitchCamera = {
+                              lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+                                  CameraSelector.LENS_FACING_FRONT
+                              } else {
+                                  CameraSelector.LENS_FACING_BACK
                               }
-
-                              Spacer(modifier = Modifier.height(4.dp))
-                              Text(
-                                  text = when (currentMode) {
-                                      CameraMode.PHOTO -> "PHOTO"
-                                      CameraMode.VIDEO -> if (isRecording) "RECORDING..." else "VIDEO"
-                                      CameraMode.PORTRAIT -> "PORTRAIT"
-                                      CameraMode.CINEMATIC -> "CINEMATIC"
-                                      CameraMode.PANO -> "PANORAMA"
-                                  },
-                                  modifier = Modifier.fillMaxWidth(),
-                                  color = if (isRecording) Color(0xFFFF3B30) else Color.White.copy(alpha = 0.75f),
-                                  textAlign = TextAlign.Center,
-                                  fontSize = 12.sp,
-                                  fontWeight = FontWeight.Bold
-                              )
                           }
-                      }
+                      )
                   }
               }
           }
 
           @Composable
-          private fun GlassTopBar(
+          private fun TopGlassBar(
               mode: CameraMode,
-              onSwitchCamera: () -> Unit,
               torchOn: Boolean,
-              onTorchToggle: (Boolean) -> Unit,
               showGrid: Boolean,
-              onGridToggle: (Boolean) -> Unit
+              onTorchToggle: (Boolean) -> Unit,
+              onGridToggle: (Boolean) -> Unit,
+              onSwitchCamera: () -> Unit
           ) {
               Surface(
                   modifier = Modifier
                       .fillMaxWidth()
-                      .windowInsetsPadding(WindowInsets.statusBars)
+                      .windowInsetsPadding(WindowInsets(0, 16, 0, 0))
                       .padding(horizontal = 14.dp, vertical = 10.dp)
-                      .clip(RoundedCornerShape(26.dp))
+                      .clip(RoundedCornerShape(24.dp))
                       .graphicsLayer {
                           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                              renderEffect =
-                                  android.graphics.RenderEffect.createBlurEffect(
-                                      42f,
-                                      42f,
-                                      android.graphics.Shader.TileMode.MIRROR
-                                  ).asComposeRenderEffect()
+                              renderEffect = android.graphics.RenderEffect
+                                  .createBlurEffect(42f, 42f, android.graphics.Shader.TileMode.MIRROR)
+                                  .asComposeRenderEffect()
                           }
                       },
-                  color = Color(0x1EFFFFFF),
+                  color = Color(0x1CFFFFFF),
                   tonalElevation = 0.dp,
                   shadowElevation = 0.dp
               ) {
                   Row(
                       modifier = Modifier
                           .fillMaxWidth()
-                          .padding(horizontal = 16.dp, vertical = 12.dp),
+                          .padding(horizontal = 14.dp, vertical = 12.dp),
                       horizontalArrangement = Arrangement.SpaceBetween,
                       verticalAlignment = Alignment.CenterVertically
                   ) {
-                      Text(
-                          text = "Live Glass",
-                          color = Color.White,
-                          fontSize = 18.sp,
-                          fontWeight = FontWeight.Bold
-                      )
-
-                      Text(
-                          text = when (mode) {
-                              CameraMode.PHOTO -> "PHOTO"
-                              CameraMode.VIDEO -> "VIDEO"
-                              CameraMode.PORTRAIT -> "PORTRAIT"
-                              CameraMode.CINEMATIC -> "CINEMATIC"
-                              CameraMode.PANO -> "PANO"
-                          },
-                          color = Color(0xFFFFD60A),
-                          fontSize = 12.sp,
-                          fontWeight = FontWeight.Bold
-                      )
+                      Column {
+                          Text(
+                              text = "Live Glass",
+                              color = Color.White,
+                              fontSize = 18.sp,
+                              fontWeight = FontWeight.Bold
+                          )
+                          Text(
+                              text = when (mode) {
+                                  CameraMode.PHOTO -> "PHOTO"
+                                  CameraMode.VIDEO -> "VIDEO"
+                                  CameraMode.PORTRAIT -> "PORTRAIT"
+                                  CameraMode.CINEMATIC -> "CINEMATIC"
+                                  CameraMode.PANO -> "PANO"
+                              },
+                              color = Color(0xFFFFD60A),
+                              fontSize = 11.sp,
+                              fontWeight = FontWeight.Bold
+                          )
+                      }
 
                       Row(verticalAlignment = Alignment.CenterVertically) {
                           IconButton(onClick = { onTorchToggle(!torchOn) }) {
@@ -743,7 +665,7 @@ jobs:
                                   tint = if (torchOn) Color(0xFFFFD60A) else Color.White
                               )
                           }
-                          IconButton(onClick = onGridToggle) {
+                          IconButton(onClick = { onGridToggle(!showGrid) }) {
                               Icon(
                                   imageVector = Icons.Default.GridOn,
                                   contentDescription = "Grid",
@@ -763,7 +685,7 @@ jobs:
           }
 
           @Composable
-          private fun ModernModeStrip(
+          private fun ModeStrip(
               modes: List<CameraMode>,
               current: CameraMode,
               onSelect: (CameraMode) -> Unit
@@ -775,24 +697,18 @@ jobs:
               ) {
                   items(modes) { mode ->
                       val selected = mode == current
-                      val scale by animateFloatAsState(
-                          targetValue = if (selected) 1.08f else 1f,
-                          label = "modeScale"
-                      )
-
                       Surface(
                           modifier = Modifier
                               .clip(RoundedCornerShape(999.dp))
-                              .clickable { onSelect(mode) }
-                              .graphicsLayer(scaleX = scale, scaleY = scale),
-                          color = if (selected) Color(0x22FFD60A) else Color(0x14FFFFFF),
+                              .clickable { onSelect(mode) },
+                          color = if (selected) Color(0x26FFD60A) else Color(0x14FFFFFF),
                           tonalElevation = 0.dp,
                           shadowElevation = 0.dp
                       ) {
                           Text(
                               text = mode.name,
                               modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                              color = if (selected) Color(0xFFFFD60A) else Color.White.copy(alpha = 0.7f),
+                              color = if (selected) Color(0xFFFFD60A) else Color.White.copy(alpha = 0.75f),
                               fontSize = 12.sp,
                               fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
                           )
@@ -802,13 +718,102 @@ jobs:
           }
 
           @Composable
-          private fun ZoomPill(label: String, currentZoom: Float, target: Float, onClick: (Float) -> Unit) {
-              val selected = kotlin.math.abs(currentZoom - target) < 0.15f
+          private fun BottomGlassPanel(
+              zoomRatio: Float,
+              onZoomChange: (Float) -> Unit,
+              mode: CameraMode,
+              isRecording: Boolean,
+              onPrimaryAction: () -> Unit,
+              onSwitchCamera: () -> Unit
+          ) {
+              Surface(
+                  modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(horizontal = 14.dp, vertical = 8.dp)
+                      .clip(RoundedCornerShape(28.dp))
+                      .graphicsLayer {
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                              renderEffect = android.graphics.RenderEffect
+                                  .createBlurEffect(48f, 48f, android.graphics.Shader.TileMode.MIRROR)
+                                  .asComposeRenderEffect()
+                          }
+                      },
+                  color = Color(0x1AFFFFFF),
+                  tonalElevation = 0.dp,
+                  shadowElevation = 0.dp
+              ) {
+                  Column(
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(horizontal = 16.dp, vertical = 14.dp)
+                  ) {
+                      Text(
+                          text = "Zoom",
+                          color = Color.White.copy(alpha = 0.8f),
+                          fontSize = 12.sp,
+                          fontWeight = FontWeight.Medium
+                      )
+
+                      Slider(
+                          value = zoomRatio,
+                          onValueChange = { onZoomChange(it.coerceIn(1f, 8f)) },
+                          valueRange = 1f..8f,
+                          steps = 0
+                      )
+
+                      Row(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalArrangement = Arrangement.SpaceBetween,
+                          verticalAlignment = Alignment.CenterVertically
+                      ) {
+                          ZoomChip("0.5x", 0.5f, zoomRatio, onZoomChange)
+                          ZoomChip("1x", 1f, zoomRatio, onZoomChange)
+                          ZoomChip("2x", 2f, zoomRatio, onZoomChange)
+                          ZoomChip("5x", 5f, zoomRatio, onZoomChange)
+                      }
+
+                      Spacer(modifier = Modifier.height(14.dp))
+
+                      Row(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalArrangement = Arrangement.SpaceBetween,
+                          verticalAlignment = Alignment.CenterVertically
+                      ) {
+                          GlassAction(
+                              icon = Icons.Default.Cameraswitch,
+                              label = "Flip",
+                              onClick = onSwitchCamera
+                          )
+
+                          CaptureButton(
+                              mode = mode,
+                              isRecording = isRecording,
+                              onClick = onPrimaryAction
+                          )
+
+                          GlassAction(
+                              icon = Icons.Default.Videocam,
+                              label = if (isRecording) "Stop" else "Rec",
+                              onClick = onPrimaryAction
+                          )
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          private fun ZoomChip(
+              label: String,
+              target: Float,
+              current: Float,
+              onZoomChange: (Float) -> Unit
+          ) {
+              val selected = kotlin.math.abs(current - target) < 0.15f
               Surface(
                   modifier = Modifier
                       .clip(CircleShape)
-                      .clickable { onClick(target) },
-                  color = if (selected) Color(0x33FFD60A) else Color.Transparent
+                      .clickable { onZoomChange(target) },
+                  color = if (selected) Color(0x26FFD60A) else Color.Transparent
               ) {
                   Text(
                       text = label,
@@ -821,28 +826,25 @@ jobs:
           }
 
           @Composable
-          private fun GlassActionButton(
+          private fun GlassAction(
               icon: androidx.compose.ui.graphics.vector.ImageVector,
               label: String,
-              active: Boolean,
               onClick: () -> Unit
           ) {
-              Column(
-                  horizontalAlignment = Alignment.CenterHorizontally
-              ) {
+              Column(horizontalAlignment = Alignment.CenterHorizontally) {
                   Surface(
                       modifier = Modifier
-                          .size(54.dp)
+                          .size(52.dp)
                           .clip(CircleShape)
-                          .clickable(onClick = onClick),
-                      color = if (active) Color(0x33FFD60A) else Color(0x18FFFFFF),
+                          .clickable { onClick() },
+                      color = Color(0x18FFFFFF),
                       shadowElevation = 0.dp
                   ) {
                       Box(contentAlignment = Alignment.Center) {
                           Icon(
                               imageVector = icon,
                               contentDescription = label,
-                              tint = if (active) Color(0xFFFFD60A) else Color.White
+                              tint = Color.White
                           )
                       }
                   }
@@ -858,13 +860,12 @@ jobs:
           @Composable
           private fun CaptureButton(
               mode: CameraMode,
-              recording: Boolean,
-              onPhoto: () -> Unit
+              isRecording: Boolean,
+              onClick: () -> Unit
           ) {
-              val isVideo = mode == CameraMode.VIDEO
-              val fill by animateFloatAsState(
-                  targetValue = if (recording) 0.58f else 1f,
-                  label = "captureFill"
+              val innerScale by animateFloatAsState(
+                  targetValue = if (isRecording) 0.62f else 1f,
+                  label = "captureScale"
               )
 
               Box(
@@ -873,23 +874,19 @@ jobs:
                       .border(3.dp, Color.White, CircleShape)
                       .padding(6.dp)
                       .clip(CircleShape)
-                      .clickable { onPhoto() },
+                      .clickable { onClick() },
                   contentAlignment = Alignment.Center
               ) {
                   Box(
                       modifier = Modifier
                           .fillMaxSize()
-                          .clip(
-                              if (isVideo) RoundedCornerShape(18.dp) else CircleShape
-                          )
-                          .background(if (recording) Color(0xFFFF3B30) else Color.White)
+                          .clip(if (mode == CameraMode.VIDEO) RoundedCornerShape(18.dp) else CircleShape)
+                          .background(if (isRecording) Color(0xFFFF3B30) else Color.White)
                   )
                   Box(
                       modifier = Modifier
-                          .fillMaxSize(fraction = fill)
-                          .clip(
-                              if (isVideo) RoundedCornerShape(12.dp) else CircleShape
-                          )
+                          .fillMaxSize(fraction = innerScale)
+                          .clip(if (mode == CameraMode.VIDEO) RoundedCornerShape(14.dp) else CircleShape)
                           .background(Color.Black.copy(alpha = 0.12f))
                   )
               }
@@ -897,40 +894,57 @@ jobs:
 
           @Composable
           private fun GridOverlay() {
-              androidx.compose.foundation.Canvas(
-                  modifier = Modifier
-                      .fillMaxSize()
-                      .background(Color.Transparent)
-              ) {
-                  val lineColor = Color.White.copy(alpha = 0.11f)
-                  val thirdWidth = size.width / 3f
-                  val thirdHeight = size.height / 3f
+              Box(modifier = Modifier.fillMaxSize()) {
+                  Box(
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .height(1.dp)
+                          .align(Alignment.TopCenter)
+                          .padding(top = 0.dp)
+                          .background(Color.White.copy(alpha = 0.12f))
+                  )
+                  Box(
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .height(1.dp)
+                          .align(Alignment.Center)
+                          .background(Color.White.copy(alpha = 0.12f))
+                  )
+                  Box(
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .height(1.dp)
+                          .align(Alignment.BottomCenter)
+                          .background(Color.White.copy(alpha = 0.12f))
+                  )
 
-                  for (i in 1..2) {
-                      val x = thirdWidth * i
-                      drawLine(
-                          color = lineColor,
-                          start = Offset(x, 0f),
-                          end = Offset(x, size.height),
-                          strokeWidth = 1f
-                      )
-                  }
-
-                  for (i in 1..2) {
-                      val y = thirdHeight * i
-                      drawLine(
-                          color = lineColor,
-                          start = Offset(0f, y),
-                          end = Offset(size.width, y),
-                          strokeWidth = 1f
-                      )
-                  }
+                  Box(
+                      modifier = Modifier
+                          .width(1.dp)
+                          .fillMaxSize()
+                          .align(Alignment.CenterStart)
+                          .background(Color.White.copy(alpha = 0.12f))
+                  )
+                  Box(
+                      modifier = Modifier
+                          .width(1.dp)
+                          .fillMaxSize()
+                          .align(Alignment.Center)
+                          .background(Color.White.copy(alpha = 0.12f))
+                  )
+                  Box(
+                      modifier = Modifier
+                          .width(1.dp)
+                          .fillMaxSize()
+                          .align(Alignment.CenterEnd)
+                          .background(Color.White.copy(alpha = 0.12f))
+                  )
               }
           }
 
           private fun takePhoto(context: Context, imageCapture: ImageCapture) {
               val name = "LiveGlass_${System.currentTimeMillis()}.jpg"
-              val contentValues = ContentValues().apply {
+              val values = ContentValues().apply {
                   put(MediaStore.MediaColumns.DISPLAY_NAME, name)
                   put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -938,18 +952,18 @@ jobs:
                   }
               }
 
-              val outputOptions = ImageCapture.OutputFileOptions.Builder(
+              val options = ImageCapture.OutputFileOptions.Builder(
                   context.contentResolver,
                   MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                  contentValues
+                  values
               ).build()
 
               imageCapture.takePicture(
-                  outputOptions,
+                  options,
                   ContextCompat.getMainExecutor(context),
                   object : ImageCapture.OnImageSavedCallback {
                       override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                          Toast.makeText(context, "تم حفظ الصورة بنجاح 📸", Toast.LENGTH_SHORT).show()
+                          Toast.makeText(context, "تم حفظ الصورة", Toast.LENGTH_SHORT).show()
                       }
 
                       override fun onError(exc: ImageCaptureException) {
@@ -971,7 +985,7 @@ jobs:
               onStateChanged: (Boolean) -> Unit
           ) {
               if (videoCapture == null) {
-                  Toast.makeText(context, "الفيديو غير جاهز الآن", Toast.LENGTH_SHORT).show()
+                  Toast.makeText(context, "الفيديو غير جاهز", Toast.LENGTH_SHORT).show()
                   return
               }
 
@@ -982,31 +996,19 @@ jobs:
                   return
               }
 
-              val contentValues = ContentValues().apply {
-                  put(MediaStore.MediaColumns.DISPLAY_NAME, "LiveGlass_${System.currentTimeMillis()}.mp4")
-                  put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                      put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/LiveGlassCamera")
-                  }
-              }
+              val dir = File(context.externalCacheDir, "recordings").apply { mkdirs() }
+              val file = File(dir, "LiveGlass_${System.currentTimeMillis()}.mp4")
+              val outputOptions = FileOutputOptions.Builder(file).build()
 
-              val outputOptions = MediaStoreOutputOptions.Builder(
-                  context.contentResolver,
-                  MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-              ).setContentValues(contentValues).build()
-
-              val hasAudioPermission =
-                  ContextCompat.checkSelfPermission(
-                      context,
-                      Manifest.permission.RECORD_AUDIO
-                  ) == PackageManager.PERMISSION_GRANTED
+              val hasAudio = ContextCompat.checkSelfPermission(
+                  context,
+                  Manifest.permission.RECORD_AUDIO
+              ) == PackageManager.PERMISSION_GRANTED
 
               val recording = videoCapture.output
                   .prepareRecording(context, outputOptions)
                   .apply {
-                      if (hasAudioPermission) {
-                          withAudioEnabled()
-                      }
+                      if (hasAudio) withAudioEnabled()
                   }
                   .start(ContextCompat.getMainExecutor(context)) { event ->
                       when (event) {
@@ -1014,7 +1016,6 @@ jobs:
                               onStateChanged(true)
                               Toast.makeText(context, "بدأ التسجيل", Toast.LENGTH_SHORT).show()
                           }
-
                           is VideoRecordEvent.Finalize -> {
                               onStateChanged(false)
                               onRecordingChanged(null)
@@ -1025,11 +1026,7 @@ jobs:
                                       Toast.LENGTH_LONG
                                   ).show()
                               } else {
-                                  Toast.makeText(
-                                      context,
-                                      "تم حفظ الفيديو في الذاكرة المؤقتة",
-                                      Toast.LENGTH_SHORT
-                                  ).show()
+                                  Toast.makeText(context, "تم حفظ الفيديو", Toast.LENGTH_SHORT).show()
                               }
                           }
                       }
@@ -1039,23 +1036,26 @@ jobs:
           }
           EOF
 
-          cat > app/src/main/res/xml/file_paths.xml <<'EOF'
-          <paths />
-          EOF
-
-      - name: Generate Gradle Wrapper
+      - name: Create Gradle wrapper
         shell: bash
         run: |
           set -euo pipefail
           gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type bin
 
-      - name: Build Debug APK
+      - name: Validate Gradle wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew -v
+
+      - name: Build debug APK
         shell: bash
         run: |
           set -euo pipefail
           ./gradlew --no-daemon :app:assembleDebug
 
-      - name: Upload Debug APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: LiveGlassCamera-debug-apk
