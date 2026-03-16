@@ -1,4 +1,4 @@
- name: Build Glass Camera APK
+name: Build Glass Camera APK
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
 
-    - name: Create Settings file (The Fix!)
+    - name: Create Settings file
       run: |
         cat << 'EOF' > settings.gradle.kts
         pluginManagement {
@@ -60,4 +60,3 @@ jobs:
       with:
         name: Glass-Camera-Pro-APK
         path: app/build/outputs/apk/debug/app-debug.apk
-#2187284
